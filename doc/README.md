@@ -6,16 +6,16 @@
 
 | 目录 | 职责 | 主要对象 |
 |---|---|---|
-| `src/model` | 封装几何、样式、图形树、ID 约束和结构变更 | Shape、六种具体图形、SvgDocument、ShapeFactory |
-| `src/application` | 管理当前文档与文件路径，定义 IO 边界 | Editor、FileStore、DocumentCodec |
-| `src/commands` | 执行用例，事务恢复与撤销重做 | Command、EditCommand、各具体 Command、CommandHistory |
-| `src/cli` | 分词、命令注册、错误格式化与交互协调 | Tokenizer、CommandRegistry、CommandProcessor |
+| `src/model` | 管理图形的几何、样式、层级和 ID | Shape、六种具体图形、SvgDocument、ShapeFactory |
+| `src/application` | 管理当前文档与文件路径，定义读写接口 | Editor、FileStore、DocumentCodec |
+| `src/commands` | 执行命令，处理失败恢复与撤销重做 | Command、EditCommand、各具体 Command、CommandHistory |
+| `src/cli` | 解析输入、分发命令、整理输出 | Tokenizer、CommandRegistry、CommandProcessor |
 | `src/infrastructure` | 文件系统、XML 解析与 SVG 输出 | NodeFileStore、SvgCodec、XmlWriter |
 | `src/main.ts` | 组装依赖、连接标准输入输出 | readline 启动入口 |
 | `tests` | 模型、命令、SVG、真实进程与架构验收 | TestSession、TestFileStore 与测试用例 |
 | `examples` | 可回放的流程图脚本、生成 SVG、外部导入样例 | flowchart.commands、flowchart.svg、other.svg |
 
-所有类独立成文件，文件名与类名一致。Shape 的字段私有，通过行为方法操作；各叶子定义移动、克隆与摘要的多态行为，Group 持有并操作子对象。
+每个类单独放在同名文件中。Shape 的字段设为私有，由方法修改；各图形分别实现移动、克隆和属性摘要，Group 则负责对子图形进行操作。
 
 组件图的源文件为 [architecture.puml](architecture.puml)：
 
@@ -41,17 +41,17 @@ main --> application
 @enduml
 ```
 
-### 设计模式及落地
+### 设计模式的选择
 
-**Command（必选）**：每个命令一个具体类。CommandProcessor 通过统一 execute 接口调用命令；编辑命令继承 EditCommand，成功后记录到 CommandHistory。显示命令不入栈，文档命令成功后建立历史屏障。
+**Command**：每个命令对应一个类，由 CommandProcessor 调用 execute。编辑命令继承 EditCommand，成功后存入 CommandHistory；显示命令不入栈。文档命令执行成功后清空旧历史，并暂时禁止撤销。
 
-**Composite**：Shape 定义共同操作，叶子实现自身几何行为，Group 对子对象递归调用相同方法。命令调用 move/scale/set 时不按图形类型分支。组的样式写在 `<g>` 上，遵循 SVG 继承规则，子节点自己的显式样式仍有效，不强制覆盖每个后代。
+**Composite**：Shape 定义图形共有的操作，具体图形修改自身几何数据，Group 递归调用子图形的方法。这样 move/scale/set 等命令可以统一处理图形和组。组的样式写在 `<g>` 上，按 SVG 规则继承，子节点自己设置的样式仍然有效。
 
-**Memento**：编辑命令持有操作前后的文档深拷贝。撤销恢复前态，重做恢复后态，避免通过反向浮点运算或重放输入累计误差。复杂分组操作也能恢复父子关系和顺序。失败时恢复前态，不修改历史。clone 通过多态保留具体类型，不暴露可变内部字段。
+**Memento**：编辑命令保存操作前后的文档副本，撤销和重做时直接恢复。这比反向计算坐标更容易处理浮点误差，也能还原分组后的父子关系和顺序。执行失败时恢复原文档，历史保持不变。副本通过各图形的 clone 方法生成。
 
-**Factory 与依赖注入**：图形类型名只在 ShapeFactory 的定义表中映射到类；创建和 SVG 导入共用该表。命令名只在 CommandRegistry 中映射到实现。Editor 依赖 FileStore 和 DocumentCodec 接口，由入口注入具体对象。
+**Factory 与依赖注入**：ShapeFactory 负责按类型创建图形，CLI 创建和 SVG 导入共用这套定义。CommandRegistry 负责按命令名选择实现。Editor 通过 FileStore 和 DocumentCodec 接口读写文件，具体对象在 main 中创建并传入。
 
-按作业要求，**CommandRegistry 与 ShapeFactory 是两个待重构的名字分发点**：本阶段内置注册表，后续可提取注册接口让插件安装命令和图形定义。当前不实现动态插件加载，未注册的 box 按要求报错。
+CommandRegistry 和 ShapeFactory 是目前两处按名字分发的位置，也列为后续重构项。下一阶段可以开放注册接口，让插件添加命令和图形类型。当前尚未实现插件加载，create box 会报未知类型。
 
 ### 依赖方向规则
 
@@ -64,17 +64,17 @@ main --> application
 | infrastructure | infrastructure、application、model | 实现上层接口，依赖模型读取和写入文档 |
 | main | 全部模块 | 仅作为依赖组装入口 |
 
-MarkupWriter 是 model 自己声明的序列化端口，模型不导入基础设施或 XML 类型。SvgCodec 使用真实 XML 解析器，不以正则解析 SVG 树；正则仅做词法、数值和支持范围校验。
+model 中的 MarkupWriter 接口用于输出图形，具体 XML 格式由 XmlWriter 处理。SvgCodec 使用 XML 解析库读取节点；正则只用于分词、数值格式和部分输入检查。
 
 ### 变化点假设
 
-1. **新增图形类型**：增加 Shape 子类及 ShapeDefinition 注册，复用命令与历史。暂不承诺新增复杂复合图形时内核零修改；那是后续插件阶段的目标。
-2. **新增交互入口**：命令和 Editor 不依赖 readline；以后可由 GUI 或 agent 调用。当前反馈是字符串数组，多语言或结构化事件需求出现后再提取消息对象。
-3. **替换存储或格式**：分别实现 FileStore 或 DocumentCodec；测试使用内存文件存储验证接口可替换。
-4. **大型文档与长历史**：当前每次编辑保存前后完整文档，每条历史的时间与内存成本约 O(N)。针对本实验优先确保正确性，未做历史压缩；大型场景应改为局部 memento 或增量命令。
-5. **扩大 SVG 范围**：保留 codec 边界。当前拒绝 transform/CSS/path 等特性；以后需要先制定坐标变换和样式级联规则，再增加支持。
+1. **增加图形类型**：添加 Shape 子类，在 ShapeFactory 中补充对应的 ShapeDefinition，已有命令和历史可以复用。复杂复合图形的扩展放到插件阶段处理。
+2. **增加交互方式**：命令和 Editor 不依赖 readline，以后可以接入 GUI 或 agent。当前输出用字符串数组表示，暂未设计多语言或事件系统。
+3. **更换存储或格式**：实现 FileStore 或 DocumentCodec 即可。测试中使用了内存文件存储。
+4. **文档和历史变大**：每次编辑都保存完整文档，每条历史约占 O(N) 空间，N 为图形数。目前实验规模较小，先采用这种容易检查的方案；数据量增大后再改为局部快照或增量记录。
+5. **支持更多 SVG 特性**：相关修改集中在 codec 中。transform、CSS 和 path 需要额外处理坐标变换及样式规则，本阶段暂未加入。
 
-## 行为决策与支持边界
+## 部分实现约定
 
 - init 默认 800×600，只给宽度时高度仍为 600；canvas 修改尺寸要求宽高成对给出。画布尺寸为正，几何尺寸/半径和 stroke-width 非负，坐标可负，所有数值必须有限。
 - group 至少选择一个图形，按原文档前序遍历顺序收编。新组放到所选图形的最近公共祖先内，位于第一个被选分支原来的位置。跨父容器时其余空容器保留。不允许重复选择，也不允许同时选择祖先与后代。
@@ -91,22 +91,21 @@ MarkupWriter 是 model 自己声明的序列化端口，模型不导入基础设
 
 ## 过程记录
 
-以下记录来自本次实际实现，不补造开发前不存在的历史。
+开发中使用 Codex 辅助规划、编写代码和测试。几处主要调整如下：
 
-1. **需求与架构**：初始目录只有 phase_cli_1.md。先识别 TypeScript/OOP、Command、Composite、两处分发、文档和 Git 约束；用户确认规划后开始实施。
-2. **模型先行**：实现六种具体图形、统一抽象、树结构与 ID 校验，用模型测试验证分组、顺序、递归缩放和循环拒绝，然后单独提交。
-3. **撤销方案修订**：原计划逐命令保存局部旧值；实现时统一为完整文档 memento。分组、删除、跨容器移动的恢复涉及多处顺序，完整快照更容易验证原子性。接受 O(N) 成本，大型文档前需要重构。
-4. **读取边界**：背景示例展示 transform，但编辑规则定义的是直接几何操作。为避免保留的 transform 与后续几何编辑混用造成坐标歧义，当前选择明确拒绝，而非静默移除。限制写入使用说明。
-5. **发现并修正 XML 缩进问题**：审查序列化时发现父节点的逐行缩进可能给文本换行插入空格。改为将控制空白编码为数值实体，并加入中文、emoji、CDATA、多行文本和属性往返测试。
-6. **发现并修正 ID 冲突遗漏**：元素 ID 预扫描已避免自动 ID 与显式 ID 冲突，进一步补上根 svg 的 ID 预留及后续 create 冲突检查。
-7. **测试自身修正**：逐命令撤销验收中，删除 a 后仍执行 show a，因节点缺失而失败。将观察目标换成保留的 scene，再验证显示操作不影响历史，没有因此放宽产品行为。
-8. **真实 IO 与进程验收**：除内存测试，还启动实际 CLI 子进程，验证 EOF、stderr、退出码、UTF-8 文件路径和原子写入清理。
+1. **先做模型**：根据 phase_cli_1.md 确定模块划分，先实现六种图形和树操作，测试分组顺序、递归缩放和循环检查，再接入命令。
+2. **调整撤销方案**：最初准备让每条命令保存局部旧值。实现分组、删除和跨容器移动时，发现需要分别记录多个父节点和位置，改用完整文档快照，代价是更高的内存占用。
+3. **确定导入范围**：背景示例中有 transform，但当前模型直接修改几何坐标。暂时拒绝导入 transform，避免编辑后的坐标含义不清，限制已写入使用说明。
+4. **修正文本缩进**：检查序列化代码时发现，给子节点逐行缩进会改变多行文本。改为把换行、回车和制表符写成数值实体，并补充往返测试。
+5. **补上根节点 ID 检查**：自动分配 ID 时已预留所有图形 ID，后来又补上根 svg 的 ID，防止新建图形与根节点重名。
+6. **修正测试用例**：撤销测试删除 a 后还调用 show a，导致测试失败。把查询对象换成保留的 scene，继续检查显示命令是否影响历史。
+7. **检查实际运行**：通过 CLI 子进程和终端操作检查 EOF、错误输出、退出码、中文路径及文件写入失败后的清理。
 
 ## 一致性自查
 
 ### 模块划分
 
-实际目录与方案一致。细化增加 ShapeDefinition、Validation、MarkupWriter，分别承担图形参数、校验与输出端口职责，仍位于原定 model 模块；没有新增跨层业务目录。显示命令生成字符串，实际终端输出在 main 完成。
+实际目录与方案一致。实现中增加了 ShapeDefinition、Validation、MarkupWriter，分别处理图形参数、校验和输出接口，均放在 model 中。显示命令生成字符串，由 main 输出到终端。
 
 撤销从局部恢复数据改为整文档 memento，已记录于过程记录和变化点假设。
 
@@ -122,11 +121,11 @@ MarkupWriter 是 model 自己声明的序列化端口，模型不导入基础设
 - SvgCodec 实现 DocumentCodec，使用 ShapeFactory 创建模型，未另建按标签名分派的 switch。
 - main 负责创建真实 IO 与处理标准输入输出。
 
-未发现违反依赖规则的 import。架构检查不声称能证明全部语义正确，行为测试负责覆盖实际用例。
+检查结果符合上述依赖规则。命令行为另外通过测试验证。
 
 ## 质量保证手段
 
-npm run check 执行源码与测试的严格类型检查、25 项测试及构建，全部通过。测试中的参数化循环覆盖多个命令与失败场景，不以单个测试数量代替命令覆盖。
+`npm run check` 包括类型检查、25 项测试和构建，均已通过。其中部分测试循环检查多条命令或多种错误输入。
 
 | 验证内容 | 证据 |
 |---|---|
@@ -141,14 +140,14 @@ npm run check 执行源码与测试的严格类型检查、25 项测试及构建
 | 真实 CLI 与文件系统 | acceptance.test.ts 子进程、原子文件替换与失败清理 |
 | 架构一致性 | architecture.test.ts 扫描全部源码 |
 
-npm run example 可回放作业中的流程图用例，生成浏览器可打开的 examples/flowchart.svg。另对构建后的 dist/main.js 执行冒烟检查。
+`npm run example` 执行作业中的流程图用例，生成 examples/flowchart.svg，可直接用浏览器打开。构建后的 dist/main.js 也进行了终端运行检查。
 
-已知限制：受限 SVG 导入范围、完整快照的内存成本、不含后续阶段的 box/插件；当前不实现 GUI。
+目前的主要限制是 SVG 导入范围较小、完整快照占用较多内存。box 和插件留到后续阶段，暂未实现 GUI。
 
 ## Git 与提交说明
 
-本地提交依次包含工程与架构、图形模型、命令与历史、SVG/CLI 与验收，最后补全说明和示例。最终验收后在本地最终提交创建 final 标签。
+代码按工程搭建、图形模型、命令与历史、SVG 读写及测试、文档和示例分步提交。本次另作一次 README 文字修订。
 
-初始目录未配置远程仓库。用户提供远程地址后才能推送提交和标签；没有声称已完成远程提交。作业截止时间未提供，本地标签不能证明已满足截止时间要求。
+远程仓库：[Logosis/svg-editor](https://github.com/Logosis/svg-editor)。提交分支为 main，作业版本使用 final 标签。
 
 XML 解析依赖 @xmldom/xmldom，API 参考其[官方仓库文档](https://github.com/xmldom/xmldom)及已安装版本的类型声明。package-lock.json 固定实际安装依赖。
