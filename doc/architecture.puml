@@ -1,0 +1,19 @@
+@startuml
+package cli
+package commands
+package application
+package model
+package infrastructure
+component main
+cli --> commands
+cli --> application
+cli --> model
+commands --> application
+commands --> model
+application --> model
+infrastructure --> application
+infrastructure --> model
+main --> cli
+main --> infrastructure
+main --> application
+@enduml
