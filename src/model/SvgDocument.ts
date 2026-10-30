@@ -53,7 +53,7 @@ export class SvgDocument {
   parentLabel(shape: Shape): string { const parent = this.parent(shape); return parent === this.root ? 'svg' : parent.label; }
   private available(id: string): void {
     Validation.id(id);
-    if (this.all().some(item => item.id === id)) throw new Error(`id already exists: ${id}`);
+    if (this.metadata.get('id') === id || this.all().some(item => item.id === id)) throw new Error(`id already exists: ${id}`);
   }
   add(shape: Shape, containerId?: string): void {
     const incoming: Shape[] = [];
